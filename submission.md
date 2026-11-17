@@ -50,3 +50,13 @@ The API-facing models define `to_dict()` methods that select response fields and
 **Supporting files.** `seed_data.py` uses `create_app()` and the same models to rebuild the database and populate users, friendships, tags, songs, playlists, listening history, and notifications. `tests/test_search.py`, `tests/test_playlists.py`, and `tests/test_streaks.py` exercise service functions with pytest fixtures and an in-memory SQLite database. The fixtures use application-factory configuration overrides to isolate test data. `requirements.txt` declares Flask, Flask-SQLAlchemy, SQLAlchemy, python-dotenv, and pytest. `README.md` documents the project structure, setup, and execution commands.
 
 **Architectural pattern.** Route groups and service boundaries follow different responsibilities: song routes use search, notification, and streak services, while playlist routes use playlist and notification services. Most handlers delegate feature work to services; the profile handler performs its lookup directly. Services share model definitions and `db.session`, and their write operations use `commit()` to persist changes. Model serialization connects database objects to the JSON API.
+
+## Root Cause Analyses
+
+**Issue #1 — My listening streak keeps resetting**
+
+- **How you reproduced it:** On the starter revision, used a user with a streak of 12 and a Saturday, June 15, 2024 UTC listen. With the clock set to Sunday morning, sent `POST /songs/<song_id>/listen`, then called `GET /users/<user_id>/streak`. The listen succeeded, but the streak was 1 instead of 13. The existing Sunday pytest case also reproduced the reset with a streak starting at 1.
+- **How you found the root cause:** Traced `routes/songs.py:listen()` to `record_listening_event()` in `services/streak_service.py`, then to `update_listening_streak()`. For the Saturday-to-Sunday dates, the date subtraction gave one day, but the weekday check evaluated to false and sent execution to the reset branch.
+- **The root cause:** The increment branch required both `days_since_last == 1` and `today.weekday() != 6`. Sunday is weekday 6, so a valid consecutive day fell through to the same branch used for a skipped day. The service committed the reset value along with the listening event.
+- **Your fix:** Use `days_since_last == 1` on its own so any consecutive UTC calendar day increments the streak.
+- **Your side-effect check:** Ran `tests/test_streaks.py`: all five cases passed, covering first listen, an ordinary consecutive day, Sunday, a repeated listen on the same day, and a skipped day.
