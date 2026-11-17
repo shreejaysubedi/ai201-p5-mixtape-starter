@@ -76,3 +76,11 @@ The API-facing models define `to_dict()` methods that select response fields and
 - **The root cause:** The outer join produced one row per song/tag association. A song with three tags matched three rows, and `.scalars().all()` returned the same song object for each row. The route counted and returned all three entries.
 - **Your fix:** Remove the tag join from the title-or-artist query. The query starts from `Song`, so each matching song has one result row, and `Song.to_dict()` still includes its tags through the existing relationship.
 - **Your side-effect check:** All five search tests passed, including no matches, artist matching, and songs with zero, one, or several tags. A Flask request for `Anthem` with the seed data returned a count of 1 and included all three tags on that result.
+
+**Issue #4 — I got notified when a friend added my song to a playlist but not when they rated it**
+
+- **How you reproduced it:** In an isolated database, sent `POST /songs/<song_id>/rate` as a friend of the song's sharer with a score of 5. The route returned 201 and a database lookup confirmed the `Rating` row, but `GET /users/<sharer_id>/notifications` returned a count of 0.
+- **How you found the root cause:** Followed `routes/songs.py:rate()` into `services/notification_service.py:rate_song()` and compared it with `add_to_playlist()` in the same module. The playlist path uses `song.shared_by` to find the recipient and calls `create_notification()`. The rating path returned immediately after committing the rating.
+- **The root cause:** `rate_song()` created or updated a `Rating`, but had no step that created a `Notification` for the sharer. Saving a rating by itself does not add anything to the notifications query.
+- **Your fix:** After preparing the rating, call `create_notification()` with the `song_rated` type, recipient, and a message with the song and score when the rater is someone other than the sharer. The helper commits the rating and notification together. A self-rating still commits without a notification.
+- **Your side-effect check:** Verified through Flask requests that the sharer can retrieve and mark the notification as read, updating a rating reuses the existing rating row, and self-ratings and invalid scores do not generate notifications.

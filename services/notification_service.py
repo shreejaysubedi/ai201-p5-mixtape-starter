@@ -72,7 +72,7 @@ def add_to_playlist(playlist_id: str, song_id: str, added_by_user_id: str) -> No
 
 def rate_song(user_id: str, song_id: str, score: int) -> Rating:
     """
-    Save a user's rating for a song.
+    Save a user's rating and notify the song's sharer if they are different users.
 
     Args:
         user_id: The ID of the user submitting the rating.
@@ -105,7 +105,15 @@ def rate_song(user_id: str, song_id: str, score: int) -> Rating:
         rating = Rating(user_id=user_id, song_id=song_id, score=score)
         db.session.add(rating)
 
-    db.session.commit()
+    if song.shared_by != user_id:
+        # This helper commits both the rating and the notification.
+        create_notification(
+            user_id=song.shared_by,
+            notification_type="song_rated",
+            body=f"{rater.username} rated your song '{song.title}' {score}/5.",
+        )
+    else:
+        db.session.commit()
 
     return rating
 
