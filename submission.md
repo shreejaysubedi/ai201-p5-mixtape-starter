@@ -37,7 +37,7 @@ The API-facing models define `to_dict()` methods that select response fields and
 
 **Feature logic — `services/`.** Services operate on models using the shared database session. They return model objects or dictionaries, while the routes own HTTP response formatting.
 
-- `search_service.py`: `search_songs()` performs case-insensitive substring matching against song titles and artists, using a query that outer-joins `song_tags`. Results are serialized through `Song.to_dict()`. `get_song()` looks up a song by primary key and returns its dictionary.
+- `search_service.py`: `search_songs()` performs case-insensitive substring matching against song titles and artists. Results are serialized through `Song.to_dict()`, which reads the tags from the model relationship. `get_song()` looks up a song by primary key and returns its dictionary.
 - `playlist_service.py`: `create_playlist()` looks up the creator and saves a new `Playlist`. `get_playlist()` retrieves metadata. `get_playlist_songs()` joins `Song` to `playlist_entries`, filters by playlist ID, and orders the query by ascending position. `get_user_playlists()` retrieves playlists by creator ID.
 - `streak_service.py`: `record_listening_event()` creates a `ListeningEvent`, calls `update_listening_streak()`, and commits the event and user changes. Streak calculations compare UTC calendar dates with the user's last listening date. `get_streak()` retrieves the stored streak value.
 - `feed_service.py`: `get_friends_listening_now()` gets the viewer's friends, filters their listening events by time, sorts newest first, and keeps the latest event per friend. `get_activity_feed()` retrieves friends' listening events newest first with a default limit of 20. Both construct entries containing a friend dictionary, a song dictionary, and a listening timestamp.
@@ -68,3 +68,11 @@ The API-facing models define `to_dict()` methods that select response fields and
 - **The root cause:** The service used a rolling 24-hour window. A listen from the previous evening was still less than 24 hours old the next morning, even though its calendar date had changed.
 - **Your fix:** Set the cutoff to the start of the current UTC day, matching the timestamps written by the listening service. Keep the inclusive comparison so a listen at midnight qualifies.
 - **Your side-effect check:** Added `tests/test_feed.py::test_listening_now_uses_utc_calendar_day`. It failed before the fix and passed afterward: midnight and earlier-today events qualify, a listen one second before midnight is excluded, only the latest song per friend appears, and the activity feed still shows older listens and repeated listens by the same friend.
+
+**Issue #3 — The same song keeps showing up twice in search**
+
+- **How you reproduced it:** Ran the existing multi-tag test in `tests/test_search.py`. Searching for `Crown Heights` returned the same `Crown Heights Anthem` ID three times. The fixture attaches three tags to that song; the tests with one tag and no tags each returned one match.
+- **How you found the root cause:** Traced `GET /songs/search` through `routes/songs.py:search()` to `services/search_service.py:search_songs()`. The service collected the scalar rows from a song query joined to `song_tags`, then serialized each row. `Song.to_dict()` in `models.py` already gets tags through `Song.tags`.
+- **The root cause:** The outer join produced one row per song/tag association. A song with three tags matched three rows, and `.scalars().all()` returned the same song object for each row. The route counted and returned all three entries.
+- **Your fix:** Remove the tag join from the title-or-artist query. The query starts from `Song`, so each matching song has one result row, and `Song.to_dict()` still includes its tags through the existing relationship.
+- **Your side-effect check:** All five search tests passed, including no matches, artist matching, and songs with zero, one, or several tags. A Flask request for `Anthem` with the seed data returned a count of 1 and included all three tags on that result.
