@@ -84,3 +84,27 @@ def test_empty_playlist_returns_empty_list(app):
 
         songs = get_playlist_songs(playlist.id)
         assert songs == []
+
+
+def test_add_song_appears_at_end_of_playlist(app, seed_playlist):
+    owner = seed_playlist["user"]
+    playlist_id = seed_playlist["playlist"].id
+    contributor = User(username="contributor", email="contributor@example.com")
+    song = Song(title="Track 6", artist="Various", shared_by=owner.id)
+    db.session.add_all([contributor, song])
+    db.session.commit()
+
+    client = app.test_client()
+    path = f"/playlists/{playlist_id}/songs"
+    payload = {"song_id": song.id, "added_by": contributor.id}
+    assert client.post(path, json=payload).status_code == 201
+
+    listing = client.get(path)
+    assert listing.status_code == 200
+    assert listing.json["count"] == 6
+    assert [entry["title"] for entry in listing.json["songs"]] == [
+        f"Track {i}" for i in range(1, 7)
+    ]
+
+    notifications = client.get(f"/users/{owner.id}/notifications").json["notifications"]
+    assert [item["type"] for item in notifications] == ["song_added_to_playlist"]
